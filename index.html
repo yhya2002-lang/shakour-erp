@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Shakour ERP | Professional Edition</title>
+    
+    <!-- ===== PWA / APK ===== -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="manifest.json">
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/main.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+
+    <!-- ===== شاشة تسجيل الدخول ===== -->
+    <div id="login-overlay" class="auth-overlay">
+        <div class="auth-card">
+            <h2>مرحباً بعودتك</h2>
+            <input type="text" id="login-user" placeholder="اسم المستخدم">
+            <input type="password" id="login-pass" placeholder="كلمة المرور">
+            <button onclick="Auth.login()" class="btn-login">تسجيل الدخول</button>
+            <div class="auth-version">Shakour ERP · Modern Edition</div>
+        </div>
+    </div>
+
+    <!-- ===== نافذة الكاميرا ===== -->
+    <div id="scanner-overlay" class="scanner-overlay">
+        <div class="scanner-container">
+            <div style="display: flex; gap: 10px; justify-content: center; margin-bottom: 15px; flex-wrap: wrap; padding: 0 10px;">
+                <button onclick="POS.stopScanner()" class="scanner-btn scanner-btn-close">
+                    <i class="fas fa-xmark"></i> إغلاق
+                </button>
+                <button onclick="POS.toggleFlash()" id="flash-btn" class="scanner-btn scanner-btn-flash">
+                    <i class="fas fa-bolt"></i> فلاش
+                </button>
+            </div>
+            <div id="reader" style="width: 100%; max-width: 450px; margin: 0 auto; border-radius: 16px; overflow: hidden;"></div>
+            <div style="text-align: center; margin-top: 15px; color: rgba(255,255,255,0.7); font-size: 0.9rem; padding: 0 10px;">
+                <i class="fas fa-camera"></i> وجّه الكاميرا نحو الباركود
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== القائمة الجانبية ===== -->
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebarDirect()"></div>
+    
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-header">Shakour ERP</div>
+        <div class="user-profile-side">
+            <i class="fas fa-circle-user"></i>
+            <div><span id="u-name">---</span><small id="u-role">---</small></div>
+        </div>
+        <ul class="nav-menu">
+            <li class="nav-item active" data-page="dashboard" onclick="App.switchPage('dashboard'); closeSidebarDirect();"><i class="fas fa-gauge-high"></i> لوحة التحكم</li>
+            <li class="nav-item" data-page="pos" onclick="App.switchPage('pos'); closeSidebarDirect();"><i class="fas fa-cash-register"></i> الكاشير (POS)</li>
+            <li class="nav-item" data-page="wholesale" onclick="App.switchPage('wholesale'); closeSidebarDirect();"><i class="fas fa-boxes-packing"></i> فاتورة بيع جملة</li>
+            <li class="nav-item" data-page="inventory" onclick="App.switchPage('inventory'); closeSidebarDirect();"><i class="fas fa-boxes-stacked"></i> المخزون</li>
+            <li class="nav-item" data-page="crm" onclick="App.switchPage('crm'); closeSidebarDirect();"><i class="fas fa-users"></i> العملاء والموردين</li>
+            <li class="nav-item" data-page="purchases" onclick="App.switchPage('purchases'); closeSidebarDirect();"><i class="fas fa-truck-fast"></i> المشتريات</li>
+            <li class="nav-item" data-page="accounting" onclick="App.switchPage('accounting'); closeSidebarDirect();"><i class="fas fa-calculator"></i> المحاسبة</li>
+            <li class="nav-item" data-page="reports" onclick="App.switchPage('reports'); closeSidebarDirect();"><i class="fas fa-chart-pie"></i> التقارير</li>
+            <li class="nav-item admin-only" data-page="system" onclick="App.showSystemMenu(); closeSidebarDirect();" style="display: none;"><i class="fas fa-gear"></i> إدارة النظام</li>
+            <li class="nav-item" onclick="toggleDarkModeDirect(); closeSidebarDirect();"><i class="fas fa-moon"></i> الوضع الليلي</li>
+            <li class="nav-item logout" onclick="Auth.logout(); closeSidebarDirect();"><i class="fas fa-right-from-bracket"></i> تسجيل الخروج</li>
+        </ul>
+    </nav>
+
+    <!-- ===== المحتوى الرئيسي ===== -->
+    <main class="main-content">
+        <header class="top-bar">
+            <button class="menu-btn" onclick="toggleSidebarDirect()">
+                <i class="fas fa-bars"></i>
+            </button>
+            <h2 id="page-title">لوحة التحكم</h2>
+            <div id="shift-badge" class="status-badge danger">الوردية مغلقة</div>
+        </header>
+        <div id="content-area" class="content-area"></div>
+    </main>
+
+    <!-- ===== النوافذ المنبثقة ===== -->
+    <div id="modal-container" class="modal">
+        <div class="modal-content">
+            <div class="modal-header"><h3 id="modal-title"></h3><button onclick="closeModalDirect()">&times;</button></div>
+            <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- ===== منطقة الطباعة ===== -->
+    <div id="print-section" class="print-only"></div>
+
+    <!-- ===== تحميل ملفات الجافا سكريبت ===== -->
+    <script src="js/auth.js"></script>
+    <script src="js/db.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/inventory.js"></script>
+    <script src="js/pos/pos-core.js"></script>
+    <script src="js/pos/pos-persons.js"></script>
+    <script src="js/pos/pos-payment.js"></script>
+    <script src="js/purchases.js"></script>
+    <script src="js/wholesale.js"></script>
+    <script src="js/gdrive.js"></script>
+    <script src="js/accounting.js"></script>
+    <script src="js/crm.js"></script>
+    <script src="js/reports.js"></script>
+    <script src="js/app.js"></script>
+    
+    <script>
+        // ================================================================
+        // دوال مباشرة للقائمة الجانبية
+        // ================================================================
+        
+        function toggleSidebarDirect() {
+            UI.toggleSidebar();
+        }
+
+        function closeSidebarDirect() {
+            UI.closeSidebar();
+        }
+
+        function toggleDarkModeDirect() {
+            document.body.classList.toggle('dark-mode');
+            var isDark = document.body.classList.contains('dark-mode');
+            
+            if (state && state.settings) {
+                state.settings.darkMode = isDark;
+                if (typeof updateState === 'function') {
+                    updateState();
+                }
+            }
+            
+            console.log('🌙 الوضع الليلي:', isDark ? 'مفعل' : 'معطل');
+        }
+
+        function closeModalDirect() {
+            UI.closeModal();
+        }
+
+        // ================================================================
+        // طلب صلاحية الكاميرا
+        // ================================================================
+        
+        async function requestCameraPermission() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "environment" } 
+                });
+                stream.getTracks().forEach(track => track.stop());
+                console.log('✅ صلاحية الكاميرا مصرح بها');
+                return true;
+            } catch (err) {
+                console.warn('⚠️ لا يمكن الوصول للكاميرا:', err);
+                return false;
+            }
+        }
+
+        // ================================================================
+        // تهيئة النظام
+        // ================================================================
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('📄 DOM جاهز');
+            
+            // طلب صلاحية الكاميرا
+            setTimeout(requestCameraPermission, 1000);
+            
+            // تهيئة قاعدة البيانات
+            if (typeof DB !== 'undefined' && DB.init) {
+                DB.init();
+            }
+            
+            if (typeof state === 'undefined') {
+                state = DB.load();
+            }
+            
+            console.log('🚀 Shakour ERP جاهز للعمل');
+            console.log('👤 المستخدمون:', state.users ? state.users.map(u => u.username).join(', ') : 'لا يوجد');
+            console.log('📦 المنتجات:', state.products ? state.products.length : 0);
+            
+            // تسجيل الدخول التلقائي
+            if (Auth && Auth.currentUser) {
+                if (typeof App !== 'undefined' && App.init) {
+                    App.init();
+                }
+            } else {
+                var loginOverlay = document.getElementById('login-overlay');
+                if (loginOverlay) {
+                    loginOverlay.style.display = 'flex';
+                }
+            }
+        });
+
+        document.addEventListener('touchmove', function(e) {
+            var touch = e.touches[0];
+            if (!touch) return;
+            var y = touch.clientY;
+            if (y < 10) {
+                e.preventDefault();
+            }
+        }, { passive: false });
+
+        console.log('✅ التنقل للخلف عبر السحب/الزر مفعّل الآن');
+        console.log('📱 استخدم زر القائمة (☰) لفتح القائمة الجانبية');
+        
+        // اختبار القائمة بعد التحميل
+        console.log('🔍 اختبار: toggleSidebarDirect() متاحة');
+        console.log('🔍 عنصر sidebar:', document.getElementById('sidebar'));
+        console.log('🔍 عنصر overlay:', document.getElementById('sidebar-overlay'));
+        
+        // إضافة اختصارات لوحة المفاتيح
+        document.addEventListener('keydown', function(e) {
+            // Esc لإغلاق النوافذ المنبثقة
+            if (e.key === 'Escape') {
+                closeModalDirect();
+                var overlay = document.getElementById('scanner-overlay');
+                if (overlay) overlay.style.display = 'none';
+            }
+            // F5 لتحديث الصفحة (مع منع التحديث الافتراضي)
+            if (e.key === 'F5' && e.ctrlKey) {
+                e.preventDefault();
+                location.reload();
+            }
+        });
+
+        // ===== تسجيل Service Worker لتفعيل العمل دون اتصال والتثبيت كتطبيق =====
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('sw.js')
+                    .then(function(reg) {
+                        console.log('✅ تم تسجيل Service Worker:', reg.scope);
+                    })
+                    .catch(function(err) {
+                        // بعض بيئات المعاينة المحلية (مثل file://) لا تدعم Service Worker،
+                        // هذا لا يمنع عمل التطبيق نفسه، فقط لن يعمل بدون اتصال
+                        console.warn('⚠️ تعذّر تسجيل Service Worker:', err);
+                    });
+            });
+        }
+    </script>
+</body>
+
+</html>
