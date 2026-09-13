@@ -95,9 +95,16 @@ const Wholesale = {
                 </div>
 
                 <label style="display:block;margin-top:15px;font-weight:500;">طريقة الدفع</label>
-                <select id="ws-payment-method" class="form-control">
-                    ${DB.getPaymentMethods().filter(m => m.enabled !== false).map(m => `<option value="${m.id}">${m.name}${m.requirePerson ? ' (يتطلب اختيار عميل)' : ''}</option>`).join('')}
+                <select id="ws-payment-method" class="form-control" onchange="Wholesale.onPaymentMethodChange()">
+                    ${DB.getPaymentMethods().filter(m => m.enabled !== false).map(m => `<option value="${m.id}">${m.name}${m.requirePerson ? ' (يتطلب اختيار عميل)' : ''}${m.requireAccount ? ' (يتطلب اختيار حساب)' : ''}</option>`).join('')}
                 </select>
+
+                <div id="ws-account-wrap" style="display:none;margin-top:10px;">
+                    <label style="display:block;font-weight:500;font-size:0.85rem;color:var(--text-secondary);">الحساب المستلم</label>
+                    <select id="ws-account" class="form-control">
+                        <option value="">-- اختر الحساب --</option>
+                    </select>
+                </div>
 
                 <button class="btn-success" onclick="Wholesale.save()" style="width:100%;margin-top:15px;padding:12px;">
                     💾 حفظ الفاتورة وإتمام البيع
@@ -152,6 +159,34 @@ const Wholesale = {
                 this.onCustomerChange();
             }
         }
+    },
+
+    onPaymentMethodChange() {
+        const methodId = document.getElementById('ws-payment-method').value;
+        const method = DB.getPaymentMethod(methodId);
+        const wrap = document.getElementById('ws-account-wrap');
+        const select = document.getElementById('ws-account');
+
+        if (!method || !method.requireAccount) {
+            wrap.style.display = 'none';
+            return;
+        }
+
+        const accounts = DB.getFinancialAccounts().filter(a =>
+            methodId === 'bank_transfer' ? a.type === 'bank' : a.type === 'wallet'
+        );
+
+        if (accounts.length === 0) {
+            UI.showToast(`⚠️ لا توجد ${methodId === 'bank_transfer' ? 'حسابات بنكية' : 'محافظ إلكترونية'} مضافة. أضِف واحداً من صفحة المحاسبة أولاً`, 'warning');
+            wrap.style.display = 'none';
+            return;
+        }
+
+        select.innerHTML = `
+            <option value="">-- اختر الحساب --</option>
+            ${accounts.map(a => `<option value="${a.id}">${a.name} (الرصيد: ${(a.balance || 0).toFixed(2)} ₪)</option>`).join('')}
+        `;
+        wrap.style.display = 'block';
     },
 
     onProductChange() {
@@ -265,6 +300,15 @@ const Wholesale = {
             return;
         }
 
+        let accountId = null;
+        if (method.requireAccount) {
+            accountId = document.getElementById('ws-account').value ? parseInt(document.getElementById('ws-account').value) : null;
+            if (!accountId) {
+                UI.showToast('⚠️ يجب اختيار الحساب المستلم لهذه الطريقة من الدفع', 'warning');
+                return;
+            }
+        }
+
         const unavailable = this.temp.filter(item => {
             const product = state.products.find(p => p.id === item.id);
             return !product || (product.stock || 0) < (item.qty || 0);
@@ -306,6 +350,17 @@ const Wholesale = {
             }
         }
 
+        // إذا كانت طريقة الدفع بنكية/محفظة، أضف المبلغ لرصيد الحساب المختار تلقائياً
+        let accountName = null;
+        if (accountId) {
+            const account = DB.getFinancialAccount(accountId);
+            if (account) {
+                DB.creditFinancialAccount(accountId, finalTotal);
+                accountName = account.name;
+                state = DB.load();
+            }
+        }
+
         const grossProfit = this.temp.reduce((sum, item) => sum + ((item.price - (item.cost || 0)) * item.qty), 0);
         const discountRatio = subTotal > 0 ? discount / subTotal : 0;
         const profit = grossProfit * (1 - discountRatio);
@@ -331,12 +386,17 @@ const Wholesale = {
             newBalance: newBalance,
             status: method.status === 'paid' ? 'paid' : (method.status === 'pending' ? 'pending' : 'unpaid'),
             paidAmount: method.status === 'paid' ? finalTotal : 0,
+            accountId: accountId || null,
+            accountName: accountName,
             createdBy: Auth.currentUser ? Auth.currentUser.name : 'النظام',
             cashierName: Auth.currentUser ? Auth.currentUser.name : 'النظام'
         };
 
         DB.addInvoice(invoice);
         App.auditLog(`📦 فاتورة جملة (خارج الكاشير) #${invoice.invoiceNumber} - ${personName} - ${invoice.total.toFixed(2)} ₪`);
+        if (accountName) {
+            App.auditLog(`🏦 تحصيل ${finalTotal.toFixed(2)} ₪ في "${accountName}" (فاتورة جملة #${invoice.invoiceNumber})`);
+        }
 
         this.temp = [];
 

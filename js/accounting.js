@@ -1,4 +1,4 @@
-// accounting.js - إدارة المحاسبة والتقارير المالية وسندات الصرف
+// accounting.js - إدارة المحاسبة والتقارير المالية وسندات الصرف والحسابات البنكية/المحافظ
 
 const Accounting = {
     renderPage(container) {
@@ -8,6 +8,9 @@ const Accounting = {
         const totalProfit = allSales.reduce((a, b) => a + (b.profit || 0), 0);
         const vouchers = DB.getVouchers();
         const totalVouchers = vouchers.reduce((a, b) => a + (b.amount || 0), 0);
+        const accounts = DB.getFinancialAccounts();
+        const totalAccountsBalance = accounts.reduce((a, b) => a + (b.balance || 0), 0);
+        const isManager = Auth.currentUser && Auth.currentUser.role === 'manager';
         
         container.innerHTML = `
             <div class="stats-grid">
@@ -32,6 +35,47 @@ const Accounting = {
             </div>
 
             <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+                <h4 style="margin:0;">🏦 البنوك والمحافظ الإلكترونية</h4>
+                ${isManager ? `
+                    <button class="btn-success" onclick="Accounting.showAddAccount()" style="padding:8px 16px;">
+                        <i class="fas fa-plus"></i> إضافة حساب
+                    </button>
+                ` : ''}
+            </div>
+
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:2px solid var(--border);margin-bottom:8px;">
+                    <span style="font-weight:700;">إجمالي أرصدة الحسابات</span>
+                    <span style="font-weight:800;color:var(--info);">${totalAccountsBalance.toFixed(2)} ₪</span>
+                </div>
+                ${accounts.length === 0 ? `
+                    <div style="text-align:center;color:var(--text-secondary);padding:20px;">
+                        لا توجد حسابات بنكية أو محافظ إلكترونية مضافة بعد
+                    </div>
+                ` : ''}
+                ${accounts.map(a => `
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border);">
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <div style="width:38px;height:38px;border-radius:10px;background:${a.type === 'bank' ? 'var(--info-soft)' : 'var(--purple-soft)'};display:flex;align-items:center;justify-content:center;">
+                                <i class="fas ${a.type === 'bank' ? 'fa-building-columns' : 'fa-mobile-screen'}" style="color:${a.type === 'bank' ? 'var(--info)' : 'var(--purple)'};"></i>
+                            </div>
+                            <div>
+                                <div style="font-weight:600;">${a.name}</div>
+                                <small style="color:var(--text-secondary);">${a.type === 'bank' ? 'حساب بنكي' : 'محفظة إلكترونية'}${a.accountNumber ? ` · ${a.accountNumber}` : ''}</small>
+                            </div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span style="font-weight:800;">${(a.balance || 0).toFixed(2)} ₪</span>
+                            ${isManager ? `
+                                <button onclick="Accounting.showEditAccount(${a.id})" class="btn-primary" style="padding:4px 10px;font-size:0.75rem;">✏️</button>
+                                <button onclick="Accounting.deleteAccount(${a.id})" class="btn-danger" style="padding:4px 10px;font-size:0.75rem;">✕</button>
+                            ` : ''}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+
+            <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
                 <h4 style="margin:0;">🧾 سندات الصرف</h4>
                 <button class="btn-success" onclick="Accounting.showAddVoucher()" style="padding:8px 16px;">
                     <i class="fas fa-plus"></i> سند صرف جديد
@@ -46,6 +90,7 @@ const Accounting = {
                             <th>التاريخ</th>
                             <th>البيان</th>
                             <th>المرتبط بـ</th>
+                            <th>المصدر</th>
                             <th>المبلغ</th>
                             <th>بواسطة</th>
                             <th></th>
@@ -53,7 +98,7 @@ const Accounting = {
                     </thead>
                     <tbody>
                         ${vouchers.length === 0 ? `
-                            <tr><td colspan="7" style="text-align:center;color:var(--text-secondary);padding:20px;">لا توجد سندات صرف</td></tr>
+                            <tr><td colspan="8" style="text-align:center;color:var(--text-secondary);padding:20px;">لا توجد سندات صرف</td></tr>
                         ` : ''}
                         ${vouchers.slice().reverse().map(v => `
                             <tr>
@@ -61,6 +106,7 @@ const Accounting = {
                                 <td>${new Date(v.createdAt).toLocaleDateString('ar-SA')}</td>
                                 <td>${v.reason || '---'}</td>
                                 <td>${v.personName || '---'}</td>
+                                <td>${v.accountName || '💵 الصندوق النقدي'}</td>
                                 <td style="color:var(--danger);font-weight:bold;">-${v.amount.toFixed(2)} ₪</td>
                                 <td>${v.createdBy || '---'}</td>
                                 <td><button onclick="Accounting.deleteVoucher(${v.id})" class="btn-danger" style="padding:4px 10px;font-size:0.75rem;">✕</button></td>
@@ -96,9 +142,131 @@ const Accounting = {
         `;
     },
 
+    // ===== إضافة حساب بنكي/محفظة جديدة (مدير فقط) =====
+    showAddAccount() {
+        if (!Auth.currentUser || Auth.currentUser.role !== 'manager') {
+            UI.showToast('⚠️ إضافة الحسابات المالية مقصورة على المدير', 'warning');
+            return;
+        }
+
+        const html = `
+            <label style="display:block;font-weight:500;font-size:0.85rem;color:var(--text-secondary);">نوع الحساب</label>
+            <select id="acc-type" class="form-control">
+                <option value="bank">🏦 حساب بنكي</option>
+                <option value="wallet">📱 محفظة إلكترونية</option>
+            </select>
+
+            <label style="display:block;margin-top:10px;font-weight:500;font-size:0.85rem;color:var(--text-secondary);">اسم الحساب</label>
+            <input type="text" id="acc-name" class="form-control" placeholder="مثال: بنك الأهلي، فودافون كاش">
+
+            <label style="display:block;margin-top:10px;font-weight:500;font-size:0.85rem;color:var(--text-secondary);">رقم الحساب / الهاتف (اختياري)</label>
+            <input type="text" id="acc-number" class="form-control" placeholder="اختياري">
+
+            <label style="display:block;margin-top:10px;font-weight:500;font-size:0.85rem;color:var(--text-secondary);">الرصيد الافتتاحي</label>
+            <input type="number" id="acc-opening" class="form-control" placeholder="0.00" value="0">
+
+            <button onclick="Accounting.saveNewAccount()" class="btn-success" style="width:100%;margin-top:15px;padding:12px;border:none;border-radius:6px;cursor:pointer;">
+                <i class="fas fa-save"></i> حفظ الحساب
+            </button>
+        `;
+        UI.showModal('🏦 إضافة حساب بنكي / محفظة', html);
+    },
+
+    saveNewAccount() {
+        const type = document.getElementById('acc-type').value;
+        const name = document.getElementById('acc-name').value.trim();
+        const accountNumber = document.getElementById('acc-number').value.trim();
+        const openingBalance = parseFloat(document.getElementById('acc-opening').value) || 0;
+
+        if (!name) {
+            UI.showToast('⚠️ يرجى إدخال اسم الحساب', 'warning');
+            return;
+        }
+
+        DB.addFinancialAccount({ type, name, accountNumber, openingBalance });
+        state = DB.load();
+        UI.closeModal();
+        UI.showToast('✅ تم إضافة الحساب بنجاح', 'success');
+        App.switchPage('accounting');
+    },
+
+    // ===== تعديل حساب (الاسم/الرقم فقط، الرصيد لا يُعدَّل يدوياً) =====
+    showEditAccount(id) {
+        if (!Auth.currentUser || Auth.currentUser.role !== 'manager') {
+            UI.showToast('⚠️ تعديل الحسابات المالية مقصور على المدير', 'warning');
+            return;
+        }
+
+        const account = DB.getFinancialAccount(id);
+        if (!account) return;
+
+        const html = `
+            <label style="display:block;font-weight:500;font-size:0.85rem;color:var(--text-secondary);">نوع الحساب</label>
+            <select id="acc-edit-type" class="form-control">
+                <option value="bank" ${account.type === 'bank' ? 'selected' : ''}>🏦 حساب بنكي</option>
+                <option value="wallet" ${account.type === 'wallet' ? 'selected' : ''}>📱 محفظة إلكترونية</option>
+            </select>
+
+            <label style="display:block;margin-top:10px;font-weight:500;font-size:0.85rem;color:var(--text-secondary);">اسم الحساب</label>
+            <input type="text" id="acc-edit-name" class="form-control" value="${account.name}">
+
+            <label style="display:block;margin-top:10px;font-weight:500;font-size:0.85rem;color:var(--text-secondary);">رقم الحساب / الهاتف (اختياري)</label>
+            <input type="text" id="acc-edit-number" class="form-control" value="${account.accountNumber || ''}">
+
+            <div style="background:var(--bg);padding:10px;border-radius:8px;margin-top:12px;font-size:0.8rem;color:var(--text-secondary);">
+                <i class="fas fa-circle-info"></i> الرصيد الحالي (${(account.balance || 0).toFixed(2)} ₪) يتحرك تلقائياً من عمليات البيع وسندات الصرف، ولا يمكن تعديله يدوياً هنا.
+            </div>
+
+            <button onclick="Accounting.saveEditAccount(${id})" class="btn-success" style="width:100%;margin-top:15px;padding:12px;border:none;border-radius:6px;cursor:pointer;">
+                <i class="fas fa-save"></i> تحديث الحساب
+            </button>
+        `;
+        UI.showModal('✏️ تعديل حساب', html);
+    },
+
+    saveEditAccount(id) {
+        const type = document.getElementById('acc-edit-type').value;
+        const name = document.getElementById('acc-edit-name').value.trim();
+        const accountNumber = document.getElementById('acc-edit-number').value.trim();
+
+        if (!name) {
+            UI.showToast('⚠️ يرجى إدخال اسم الحساب', 'warning');
+            return;
+        }
+
+        DB.updateFinancialAccount(id, { type, name, accountNumber });
+        state = DB.load();
+        UI.closeModal();
+        UI.showToast('✅ تم تحديث الحساب', 'success');
+        App.switchPage('accounting');
+    },
+
+    deleteAccount(id) {
+        if (!Auth.currentUser || Auth.currentUser.role !== 'manager') {
+            UI.showToast('⚠️ حذف الحسابات المالية مقصور على المدير', 'warning');
+            return;
+        }
+
+        const account = DB.getFinancialAccount(id);
+        if (!account) return;
+
+        const balance = account.balance || 0;
+        const message = balance !== 0
+            ? `⚠️ هذا الحساب به رصيد ${balance.toFixed(2)} ₪. سيتم حذف الحساب مع فقدان تتبع هذا الرصيد. هل أنت متأكد؟`
+            : `هل أنت متأكد من حذف حساب "${account.name}"؟`;
+
+        UI.confirmAction(message, function() {
+            DB.deleteFinancialAccount(id);
+            state = DB.load();
+            UI.showToast('✅ تم حذف الحساب', 'success');
+            App.switchPage('accounting');
+        });
+    },
+
     // ===== نافذة إنشاء سند صرف جديد =====
     showAddVoucher() {
         const suppliers = DB.getPersonsByType('supplier');
+        const accounts = DB.getFinancialAccounts();
 
         const html = `
             <label style="display:block;font-weight:500;font-size:0.85rem;color:var(--text-secondary);">نوع السند</label>
@@ -121,6 +289,12 @@ const Accounting = {
             <label style="display:block;margin-top:10px;font-weight:500;font-size:0.85rem;color:var(--text-secondary);">المبلغ</label>
             <input type="number" id="v-amount" class="form-control" placeholder="0.00">
 
+            <label style="display:block;margin-top:10px;font-weight:500;font-size:0.85rem;color:var(--text-secondary);">الصرف من</label>
+            <select id="v-account" class="form-control">
+                <option value="">💵 الصندوق النقدي</option>
+                ${accounts.map(a => `<option value="${a.id}">${a.type === 'bank' ? '🏦' : '📱'} ${a.name} (الرصيد: ${(a.balance || 0).toFixed(2)} ₪)</option>`).join('')}
+            </select>
+
             <button onclick="Accounting.saveVoucher()" class="btn-success" style="width:100%;margin-top:15px;padding:12px;border:none;border-radius:6px;cursor:pointer;">
                 <i class="fas fa-save"></i> حفظ السند
             </button>
@@ -138,6 +312,7 @@ const Accounting = {
         const type = document.getElementById('v-type').value;
         const reason = document.getElementById('v-reason').value.trim();
         const amount = parseFloat(document.getElementById('v-amount').value);
+        const accountId = document.getElementById('v-account').value ? parseInt(document.getElementById('v-account').value) : null;
 
         if (!amount || amount <= 0) {
             UI.showToast('⚠️ يرجى إدخال مبلغ صحيح', 'warning');
@@ -162,12 +337,28 @@ const Accounting = {
             return;
         }
 
+        let accountName = null;
+        if (accountId) {
+            const account = DB.getFinancialAccount(accountId);
+            if (!account) {
+                UI.showToast('⚠️ الحساب المختار غير موجود', 'warning');
+                return;
+            }
+            if ((account.balance || 0) < amount) {
+                UI.showToast(`⚠️ رصيد "${account.name}" غير كافٍ (المتوفر: ${(account.balance || 0).toFixed(2)} ₪)`, 'warning');
+                return;
+            }
+            accountName = account.name;
+        }
+
         const voucher = DB.addVoucher({
             type: type,
             reason: reason,
             amount: amount,
             personId: personId,
-            personName: personName
+            personName: personName,
+            accountId: accountId,
+            accountName: accountName
         });
 
         state = DB.load();

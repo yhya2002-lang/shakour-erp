@@ -84,6 +84,7 @@ const App = {
         const isSamePage = this.currentPageId === id;
 
         document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+        document.querySelectorAll('.bn-item').forEach(i => i.classList.remove('active'));
 
         if (window.innerWidth <= 768) {
             document.getElementById('sidebar').classList.remove('active');
@@ -137,6 +138,19 @@ const App = {
             document.getElementById('page-title').innerText = navItem.innerText.trim();
         }
 
+        const bnItem = document.querySelector(`.bn-item[data-page="${id}"]`);
+        if (bnItem) bnItem.classList.add('active');
+
+        // لصفحات غير موجودة في شريط التنقل السفلي (المشتريات، المحاسبة،
+        // التقارير...) نُبقي زر "المزيد" كمؤشر بصري بدلاً من ألا يظهر أي تفعيل
+        const bottomNavPages = ['dashboard', 'pos'];
+        if (!bottomNavPages.includes(id)) {
+            const moreItem = document.querySelector('.bn-item:last-child');
+            if (moreItem && !moreItem.classList.contains('bn-fab')) {
+                moreItem.classList.add('active');
+            }
+        }
+
         this.currentPageId = id;
 
         if (!isPopState) {
@@ -157,88 +171,212 @@ const App = {
         }
     },
 
+    // ===== قائمة "المزيد" (تجميع الصفحات غير الموجودة في شريط التنقل السفلي) =====
+    showMoreMenu() {
+        const items = [
+            { page: 'wholesale', icon: 'fa-boxes-packing', label: 'فاتورة جملة' },
+            { page: 'inventory', icon: 'fa-boxes-stacked', label: 'المخزون' },
+            { page: 'crm', icon: 'fa-users', label: 'العملاء والموردين' },
+            { page: 'purchases', icon: 'fa-truck-fast', label: 'المشتريات' },
+            { page: 'accounting', icon: 'fa-calculator', label: 'المحاسبة' },
+            { page: 'reports', icon: 'fa-chart-pie', label: 'التقارير' },
+            { page: 'system', icon: 'fa-gear', label: 'إدارة النظام' }
+        ].filter(i => Auth.canAccessPage(i.page));
+
+        const html = `
+            <div class="more-menu-grid">
+                ${items.map(i => `
+                    <div class="more-menu-item" onclick="${i.page === 'system' ? 'App.showSystemMenu()' : `App.switchPage('${i.page}')`}; UI.closeModal();">
+                        <i class="fas ${i.icon}"></i>
+                        <span>${i.label}</span>
+                    </div>
+                `).join('')}
+                <div class="more-menu-item" onclick="App.showPaymentSettings(); UI.closeModal();">
+                    <i class="fas fa-credit-card"></i>
+                    <span>إعدادات الدفع</span>
+                </div>
+                <div class="more-menu-item" onclick="toggleDarkModeDirect(); UI.closeModal();">
+                    <i class="fas fa-moon"></i>
+                    <span>الوضع الليلي</span>
+                </div>
+                <div class="more-menu-item logout-item" onclick="Auth.logout(); UI.closeModal();">
+                    <i class="fas fa-right-from-bracket"></i>
+                    <span>تسجيل الخروج</span>
+                </div>
+            </div>
+        `;
+        UI.showModal('☰ المزيد', html);
+    },
+
+    // ===== قائمة العمليات السريعة (زر + الأوسط في شريط التنقل) =====
+    showQuickActionsMenu() {
+        const isManager = Auth.currentUser && Auth.currentUser.role === 'manager';
+        const items = [
+            { action: "App.switchPage('pos')", icon: 'fa-cash-register', color: 'var(--success)', label: 'فاتورة بيع', requires: 'pos' },
+            { action: "App.switchPage('purchases')", icon: 'fa-cart-shopping', color: 'var(--danger)', label: 'فاتورة شراء', requires: 'purchases' },
+            { action: "App.switchPage('wholesale')", icon: 'fa-boxes-packing', color: 'var(--info)', label: 'فاتورة جملة', requires: 'wholesale' },
+            { action: "Accounting.showAddVoucher(); UI.closeModal();", icon: 'fa-money-bill-transfer', color: 'var(--warning)', label: 'سند صرف', requires: 'accounting' },
+            { action: "App.switchPage('crm')", icon: 'fa-user-plus', color: 'var(--purple)', label: 'عميل جديد', requires: 'crm' },
+            { action: "App.switchPage('inventory')", icon: 'fa-box', color: 'var(--gold)', label: 'صنف جديد', requires: 'inventory' },
+            ...(isManager ? [{ action: "Accounting.showAddAccount()", icon: 'fa-building-columns', color: 'var(--info)', label: 'حساب بنكي/محفظة', requires: 'accounting' }] : [])
+        ].filter(i => Auth.canAccessPage(i.requires));
+
+        const html = `
+            <div class="more-menu-grid">
+                ${items.map(i => `
+                    <div class="more-menu-item" onclick="UI.closeModal(); ${i.action}">
+                        <i class="fas ${i.icon}" style="color:${i.color};"></i>
+                        <span>${i.label}</span>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+        UI.showModal('➕ عملية جديدة', html);
+    },
+
+    // ===== قائمة المعاملات (سجل موحّد يوجّه لصفحاتها الأصلية) =====
+    showTransactionsMenu() {
+        const items = [
+            { page: 'reports', icon: 'fa-receipt', label: 'كل الفواتير', requires: 'reports' },
+            { page: 'accounting', icon: 'fa-money-bill-transfer', label: 'سندات الصرف', requires: 'accounting' },
+            { page: 'purchases', icon: 'fa-cart-shopping', label: 'فواتير الشراء', requires: 'purchases' },
+            { page: 'wholesale', icon: 'fa-boxes-packing', label: 'فواتير الجملة', requires: 'wholesale' },
+            { page: 'crm', icon: 'fa-users', label: 'أرصدة العملاء', requires: 'crm' }
+        ].filter(i => Auth.canAccessPage(i.requires));
+
+        if (items.length === 0) {
+            UI.showToast('⚠️ لا تملك صلاحية الوصول إلى المعاملات', 'warning');
+            return;
+        }
+
+        const html = `
+            <div class="more-menu-grid">
+                ${items.map(i => `
+                    <div class="more-menu-item" onclick="App.switchPage('${i.page}'); UI.closeModal();">
+                        <i class="fas ${i.icon}"></i>
+                        <span>${i.label}</span>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+        UI.showModal('📋 المعاملات', html);
+    },
+
     tplDashboard() {
         const stats = DB.getStats();
-        const todaySales = stats.todayRevenue;
-        const totalSales = stats.totalRevenue;
+        const totalPurchases = (state.purchases || []).reduce((a, b) => a + (b.total || 0), 0);
+        const totalVouchers = (DB.getVouchers ? DB.getVouchers() : []).reduce((a, b) => a + (b.amount || 0), 0);
+        const netProfit = stats.totalProfit - totalVouchers;
+        const cashBalance = state.settings.openingBalance || 0;
+        const accounts = DB.getFinancialAccounts ? DB.getFinancialAccounts() : [];
+        const totalAccountsBalance = accounts.reduce((a, b) => a + (b.balance || 0), 0);
         const lowStock = stats.lowStockItems;
         const totalDebt = stats.totalDebt;
-        const customerStats = stats.customerStats || { totalCustomers: 0, totalDebt: 0 };
-        const supplierStats = stats.supplierStats || { totalSuppliers: 0, totalPurchases: 0 };
-        const employeeStats = stats.employeeStats || { totalEmployees: 0, activeEmployees: 0 };
+        const userName = Auth.currentUser ? Auth.currentUser.name : 'زائر';
+        const todayStr = new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+        const quickActions = [
+            { action: "App.switchPage('pos')", icon: 'fa-cash-register', color: 'var(--success)', label: 'فاتورة بيع', requires: 'pos' },
+            { action: "App.switchPage('purchases')", icon: 'fa-cart-shopping', color: 'var(--danger)', label: 'فاتورة شراء', requires: 'purchases' },
+            { action: "Accounting.showAddVoucher()", icon: 'fa-money-bill-transfer', color: 'var(--warning)', label: 'سند صرف', requires: 'accounting' },
+            { action: "App.switchPage('wholesale')", icon: 'fa-boxes-packing', color: 'var(--info)', label: 'فاتورة جملة', requires: 'wholesale' },
+            { action: "App.switchPage('crm')", icon: 'fa-user-plus', color: 'var(--purple)', label: 'حساب عميل', requires: 'crm' },
+            { action: "App.switchPage('crm')", icon: 'fa-truck', color: 'var(--gold)', label: 'حساب مورد', requires: 'crm' },
+            { action: "App.switchPage('inventory')", icon: 'fa-box', color: 'var(--primary)', label: 'المخزون', requires: 'inventory' },
+            { action: "App.switchPage('reports')", icon: 'fa-file-lines', color: 'var(--text-secondary)', label: 'التقارير', requires: 'reports' }
+        ].filter(i => Auth.canAccessPage(i.requires));
 
         return `
+            <div class="dash-welcome">
+                <div class="icon-badge"><i class="fas fa-building-columns"></i></div>
+                <div>
+                    <div class="title">مرحباً بك، ${userName}</div>
+                    <div class="subtitle">${todayStr}</div>
+                </div>
+            </div>
+
             <div class="stats-grid">
-                <div class="card" style="border-right: 5px solid var(--success);">
-                    <small>💰 مبيعات اليوم</small>
-                    <h2 style="color: var(--success);">${todaySales.toFixed(2)} ₪</h2>
-                    <small style="font-size:0.7rem;color:var(--text-secondary);">${stats.todaySales} فاتورة</small>
+                <div class="stat-card">
+                    <div class="stat-icon c-success"><i class="fas fa-bag-shopping"></i></div>
+                    <div>
+                        <div class="stat-label">إجمالي المبيعات</div>
+                        <div class="stat-value">${stats.totalRevenue.toFixed(2)}</div>
+                    </div>
                 </div>
-                <div class="card" style="border-right: 5px solid var(--accent);">
-                    <small>📊 إجمالي المبيعات</small>
-                    <h2>${totalSales.toFixed(2)} ₪</h2>
+                <div class="stat-card">
+                    <div class="stat-icon c-danger"><i class="fas fa-cart-shopping"></i></div>
+                    <div>
+                        <div class="stat-label">إجمالي المشتريات</div>
+                        <div class="stat-value">${totalPurchases.toFixed(2)}</div>
+                    </div>
                 </div>
-                <div class="card" style="border-right: 5px solid var(--danger);">
-                    <small>⚠️ نواقص المخزون</small>
-                    <h2 style="color: ${lowStock > 0 ? 'var(--danger)' : 'var(--success)'};">${lowStock}</h2>
+                <div class="stat-card">
+                    <div class="stat-icon c-warning"><i class="fas fa-file-invoice-dollar"></i></div>
+                    <div>
+                        <div class="stat-label">إجمالي المصروفات</div>
+                        <div class="stat-value">${totalVouchers.toFixed(2)}</div>
+                    </div>
                 </div>
-                <div class="card" style="border-right: 5px solid var(--warning);">
-                    <small>💳 الديون (لنا)</small>
-                    <h2 style="color: var(--warning);">${totalDebt.toFixed(2)} ₪</h2>
+                <div class="stat-card">
+                    <div class="stat-icon c-info"><i class="fas fa-sack-dollar"></i></div>
+                    <div>
+                        <div class="stat-label">صافي الربح</div>
+                        <div class="stat-value">${netProfit.toFixed(2)}</div>
+                    </div>
                 </div>
-                <div class="card" style="border-right: 5px solid var(--accent);">
-                    <small>👥 العملاء</small>
-                    <h2>${customerStats.totalCustomers}</h2>
-                    <small style="font-size:0.7rem;color:var(--text-secondary);">إجمالي الديون: ${customerStats.totalDebt.toFixed(2)} ₪</small>
+                <div class="stat-card">
+                    <div class="stat-icon c-purple"><i class="fas fa-wallet"></i></div>
+                    <div>
+                        <div class="stat-label">رصيد الصندوق</div>
+                        <div class="stat-value">${cashBalance.toFixed(2)}</div>
+                    </div>
                 </div>
-                <div class="card" style="border-right: 5px solid var(--success);">
-                    <small>👨‍💼 الموظفين</small>
-                    <h2>${employeeStats.totalEmployees}</h2>
-                    <small style="font-size:0.7rem;color:var(--text-secondary);">نشط: ${employeeStats.activeEmployees}</small>
+                <div class="stat-card" ${Auth.canAccessPage('accounting') ? `onclick="App.switchPage('accounting')" style="cursor:pointer;"` : ''}>
+                    <div class="stat-icon c-info"><i class="fas fa-building-columns"></i></div>
+                    <div>
+                        <div class="stat-label">البنوك والمحافظ</div>
+                        <div class="stat-value">${totalAccountsBalance.toFixed(2)}</div>
+                    </div>
                 </div>
-                <div class="card" style="border-right: 5px solid var(--primary);">
-                    <small>🔄 الوردية</small>
-                    <button onclick="App.toggleShift()" class="btn-primary" style="margin-top:5px;background:${state.settings.shiftOpen ? 'var(--danger)' : 'var(--success)'};">
-                        ${state.settings.shiftOpen ? '🔴 إغلاق' : '🟢 فتح'}
-                    </button>
-                </div>
-                <div class="card" style="border-right: 5px solid var(--accent); grid-column: span 1;">
-                    <small>👥 المستخدمين</small>
-                    <h2>${stats.totalUsers}</h2>
+                <div class="stat-card">
+                    <div class="stat-icon c-gold"><i class="fas fa-credit-card"></i></div>
+                    <div>
+                        <div class="stat-label">الديون المستحقة</div>
+                        <div class="stat-value">${totalDebt.toFixed(2)}</div>
+                    </div>
                 </div>
             </div>
-            
-            <div class="card">
-                <h3>🏪 مرحباً في نظام شكور</h3>
-                <p style="color:var(--text-secondary);">
-                    استخدم القائمة الجانبية للتنقل بين الأقسام المختلفة.
-                    ${state.settings.shiftOpen ? '✅ الوردية مفتوحة، يمكنك البدء بالبيع.' : '⚠️ الوردية مغلقة، افتح الوردية أولاً.'}
+
+            <div class="quick-actions-title">⚡ عمليات سريعة</div>
+            <div class="quick-actions-grid">
+                ${quickActions.map(a => `
+                    <div class="quick-action-btn" onclick="${a.action}">
+                        <div class="qa-icon" style="background:${a.color};"><i class="fas ${a.icon}"></i></div>
+                        <span>${a.label}</span>
+                    </div>
+                `).join('')}
+            </div>
+
+            <div class="card" style="margin-top:18px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <h4 style="margin:0;">🔄 حالة الوردية</h4>
+                    <button onclick="App.toggleShift()" class="btn-primary" style="background:${state.settings.shiftOpen ? 'var(--danger)' : 'var(--success)'};">
+                        ${state.settings.shiftOpen ? '🔴 إغلاق الوردية' : '🟢 فتح الوردية'}
+                    </button>
+                </div>
+                ${lowStock > 0 ? `
+                <p style="color:var(--danger);margin-top:10px;font-size:0.85rem;">
+                    <i class="fas fa-triangle-exclamation"></i> يوجد ${lowStock} صنف بمخزون منخفض
                 </p>
-                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
-                    <button onclick="App.switchPage('pos')" class="btn-success" style="padding:10px 20px;border:none;border-radius:6px;cursor:pointer;">
-                        🛒 فتح الكاشير
-                    </button>
-                    <button onclick="App.switchPage('inventory')" class="btn-primary" style="padding:10px 20px;border:none;border-radius:6px;cursor:pointer;">
-                        📦 إدارة المخزون
-                    </button>
-                    <button onclick="App.switchPage('crm')" class="btn-primary" style="padding:10px 20px;border:none;border-radius:6px;cursor:pointer;background:var(--success);">
-                        👥 العملاء والموردين
-                    </button>
-                    <button onclick="App.showSystemMenu()" class="btn-primary" style="padding:10px 20px;background:var(--warning);border:none;border-radius:6px;cursor:pointer;">
-                        ⚙️ إدارة النظام
-                    </button>
-                    <button onclick="App.showPaymentSettings()" class="btn-primary" style="padding:10px 20px;background:var(--accent);border:none;border-radius:6px;cursor:pointer;">
-                        💳 إعدادات الدفع
-                    </button>
-                </div>
+                ` : ''}
             </div>
-            
+
             <div class="card">
                 <h4>📋 آخر النشاطات</h4>
                 <div style="max-height: 150px; overflow-y: auto; font-size: 0.85rem;">
                     ${(state.auditLog || []).slice(0, 5).map(log => `
                         <div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;">
-                            <i class="fas fa-circle" style="font-size:6px;color:var(--accent);"></i>
+                            <i class="fas fa-circle" style="font-size:6px;color:var(--gold);"></i>
                             <span>${log}</span>
                         </div>
                     `).join('')}

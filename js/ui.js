@@ -164,7 +164,7 @@ const UI = {
         toast.className = `toast-notification toast-${type}`;
         toast.style.cssText = `
             position: fixed;
-            bottom: 30px;
+            bottom: calc(var(--bottomnav-h, 0px) + 20px);
             left: 50%;
             transform: translateX(-50%) translateY(100px);
             background: var(--card);

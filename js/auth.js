@@ -93,6 +93,13 @@ const Auth = {
             el.style.display = this.canAccessPage(pageId) ? 'flex' : 'none';
         });
 
+        // نفس المنطق على أزرار شريط التنقل السفلي (زر الكاشير تحديداً)
+        document.querySelectorAll('.bn-item[data-page]').forEach(el => {
+            const pageId = el.getAttribute('data-page');
+            if (pageId === 'transactions') return; // قائمة مجمّعة، لا تخضع لصلاحية صفحة واحدة
+            el.style.display = this.canAccessPage(pageId) ? 'flex' : 'none';
+        });
+
         // أي عنصر admin-only آخر بدون data-page (لو أُضيف مستقبلاً) يبقى
         // مقتصراً على المدير فقط كسلوك افتراضي آمن
         document.querySelectorAll('.admin-only:not([data-page])').forEach(el => {

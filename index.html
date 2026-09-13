@@ -85,6 +85,30 @@
         <div id="content-area" class="content-area"></div>
     </main>
 
+    <!-- ===== التنقل السفلي (للموبايل) ===== -->
+    <nav class="bottom-nav" id="bottom-nav">
+        <div class="bn-item" data-page="dashboard" onclick="App.switchPage('dashboard')">
+            <i class="fas fa-house"></i>
+            <span>الرئيسية</span>
+        </div>
+        <div class="bn-item" data-page="pos" onclick="App.switchPage('pos')">
+            <i class="fas fa-cash-register"></i>
+            <span>الكاشير</span>
+        </div>
+        <div class="bn-item bn-fab" onclick="App.showQuickActionsMenu()">
+            <div class="qa-fab-circle"><i class="fas fa-plus"></i></div>
+            <span>جديد</span>
+        </div>
+        <div class="bn-item" data-page="transactions" onclick="App.showTransactionsMenu()">
+            <i class="fas fa-list-check"></i>
+            <span>المعاملات</span>
+        </div>
+        <div class="bn-item" onclick="App.showMoreMenu()">
+            <i class="fas fa-ellipsis"></i>
+            <span>المزيد</span>
+        </div>
+    </nav>
+
     <!-- ===== النوافذ المنبثقة ===== -->
     <div id="modal-container" class="modal">
         <div class="modal-content">
@@ -186,6 +210,16 @@
             
             // تسجيل الدخول التلقائي
             if (Auth && Auth.currentUser) {
+                if (typeof Auth.updateUIByRole === 'function') {
+                    Auth.updateUIByRole(Auth.currentUser.role);
+                }
+                var uNameEl = document.getElementById('u-name');
+                var uRoleEl = document.getElementById('u-role');
+                if (uNameEl) uNameEl.innerText = Auth.currentUser.name;
+                if (uRoleEl) uRoleEl.innerText = Auth.currentUser.role === 'manager' ? 'مدير' : 'موظف';
+                var loginOverlayEl = document.getElementById('login-overlay');
+                if (loginOverlayEl) loginOverlayEl.style.display = 'none';
+
                 if (typeof App !== 'undefined' && App.init) {
                     App.init();
                 }

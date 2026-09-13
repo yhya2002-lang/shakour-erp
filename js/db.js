@@ -37,17 +37,18 @@ const DB = {
                 suspendedSales: [],
                 invoices: [],
                 vouchers: [],
+                financialAccounts: [],
                 invoiceCounter: 0,
                 auditLog: [
                     `[${new Date().toLocaleDateString('ar-SA')} ${new Date().toLocaleTimeString('ar-SA')}] - النظام - تهيئة نظام شكور`
                 ],
                 paymentMethods: [
-                    { id: 'cash', name: 'نقدي', icon: 'fa-money-bill-wave', color: '#10b981', status: 'paid', requirePerson: false, enabled: true },
-                    { id: 'credit', name: 'آجل', icon: 'fa-handshake', color: '#ef4444', status: 'unpaid', requirePerson: true, enabled: true },
-                    { id: 'bank_transfer', name: 'تحويل بنكي', icon: 'fa-building-columns', color: '#f59e0b', status: 'unpaid', requirePerson: false, enabled: true },
-                    { id: 'credit_card', name: 'بطاقة ائتمان', icon: 'fa-credit-card', color: '#3b82f6', status: 'paid', requirePerson: false, enabled: true },
-                    { id: 'check', name: 'شيك', icon: 'fa-file-invoice', color: '#8b5cf6', status: 'pending', requirePerson: false, enabled: true },
-                    { id: 'digital_wallet', name: 'محفظة رقمية', icon: 'fa-mobile-screen', color: '#06b6d4', status: 'paid', requirePerson: false, enabled: true }
+                    { id: 'cash', name: 'نقدي', icon: 'fa-money-bill-wave', color: '#10b981', status: 'paid', requirePerson: false, requireAccount: false, enabled: true },
+                    { id: 'credit', name: 'آجل', icon: 'fa-handshake', color: '#ef4444', status: 'unpaid', requirePerson: true, requireAccount: false, enabled: true },
+                    { id: 'bank_transfer', name: 'تحويل بنكي', icon: 'fa-building-columns', color: '#f59e0b', status: 'unpaid', requirePerson: false, requireAccount: true, enabled: true },
+                    { id: 'credit_card', name: 'بطاقة ائتمان', icon: 'fa-credit-card', color: '#3b82f6', status: 'paid', requirePerson: false, requireAccount: false, enabled: true },
+                    { id: 'check', name: 'شيك', icon: 'fa-file-invoice', color: '#8b5cf6', status: 'pending', requirePerson: false, requireAccount: false, enabled: true },
+                    { id: 'digital_wallet', name: 'محفظة رقمية', icon: 'fa-mobile-screen', color: '#06b6d4', status: 'paid', requirePerson: false, requireAccount: true, enabled: true }
                 ],
                 settings: { 
                     shiftOpen: false, 
@@ -78,6 +79,13 @@ const DB = {
             const existing = this.load();
             let changed = false;
             if (!existing.vouchers) { existing.vouchers = []; changed = true; }
+            if (!existing.financialAccounts) { existing.financialAccounts = []; changed = true; }
+            (existing.paymentMethods || []).forEach(m => {
+                if (m.requireAccount === undefined) {
+                    m.requireAccount = (m.id === 'bank_transfer' || m.id === 'digital_wallet');
+                    changed = true;
+                }
+            });
             if (!existing.settings.nextVoucherNumber) { existing.settings.nextVoucherNumber = 1; changed = true; }
             (existing.users || []).forEach(u => {
                 if (u.pages === undefined) {
@@ -572,6 +580,15 @@ const DB = {
             }
         }
 
+        // إذا كان السند مسحوباً من حساب بنكي/محفظة إلكترونية معيّن (بدلاً من
+        // الصندوق النقدي الافتراضي)، انقص المبلغ من رصيد ذلك الحساب
+        if (voucher.accountId) {
+            const account = data.financialAccounts?.find(a => a.id === voucher.accountId);
+            if (account) {
+                account.balance = (account.balance || 0) - voucher.amount;
+            }
+        }
+
         this.save(data);
         this.addAuditLog(`🧾 سند صرف #${voucher.voucherNumber} - ${voucher.reason || voucher.personName || ''} - ${voucher.amount.toFixed(2)} ₪`);
         return voucher;
@@ -597,10 +614,80 @@ const DB = {
             }
         }
 
+        // عكس تأثير السند على رصيد الحساب البنكي/المحفظة المرتبط به إن وجد
+        if (voucher.accountId) {
+            const account = data.financialAccounts?.find(a => a.id === voucher.accountId);
+            if (account) {
+                account.balance = (account.balance || 0) + voucher.amount;
+            }
+        }
+
         data.vouchers = data.vouchers.filter(v => v.id !== id);
         this.save(data);
         this.addAuditLog(`🗑️ حذف سند صرف #${voucher.voucherNumber}`);
         return true;
+    },
+
+    // ===== الحسابات المالية (بنوك ومحافظ إلكترونية) =====
+    // كل حساب له رصيد حقيقي يتحرك تلقائياً: يزيد عند تحصيل دفعة بالكاشير
+    // بهذا الحساب (bank_transfer / digital_wallet)، وينقص عند سحب سند صرف منه
+    getFinancialAccounts() {
+        const data = this.load();
+        return data.financialAccounts || [];
+    },
+
+    getFinancialAccount(id) {
+        const data = this.load();
+        return data.financialAccounts?.find(a => a.id === id) || null;
+    },
+
+    addFinancialAccount(account) {
+        const data = this.load();
+        if (!data.financialAccounts) data.financialAccounts = [];
+        account.id = Date.now();
+        account.balance = account.openingBalance || 0;
+        account.created = new Date().toISOString();
+        data.financialAccounts.push(account);
+        this.save(data);
+        this.addAuditLog(`🏦 إضافة حساب ${account.type === 'bank' ? 'بنكي' : 'محفظة إلكترونية'}: ${account.name}`);
+        return account;
+    },
+
+    updateFinancialAccount(id, updates) {
+        const data = this.load();
+        const account = data.financialAccounts?.find(a => a.id === id);
+        if (!account) return null;
+        // لا نسمح بتعديل الرصيد مباشرة من نموذج التعديل، الرصيد يتحرك فقط
+        // عبر عمليات الكاشير وسندات الصرف حتى يبقى دقيقاً ومطابقاً للحركات الفعلية
+        delete updates.balance;
+        delete updates.openingBalance;
+        Object.assign(account, updates);
+        this.save(data);
+        this.addAuditLog(`✏️ تعديل حساب: ${account.name}`);
+        return account;
+    },
+
+    deleteFinancialAccount(id) {
+        const data = this.load();
+        const account = data.financialAccounts?.find(a => a.id === id);
+        if (!account) return { success: false, reason: 'not_found' };
+
+        data.financialAccounts = data.financialAccounts.filter(a => a.id !== id);
+        this.save(data);
+        this.addAuditLog(`🗑️ حذف حساب: ${account.name}`);
+        return { success: true };
+    },
+
+    // تُستدعى عند إتمام عملية بيع/فاتورة تُدفع عبر حساب بنكي/محفظة محدد
+    // لإضافة المبلغ لرصيد ذلك الحساب تلقائياً
+    creditFinancialAccount(accountId, amount) {
+        if (!accountId) return;
+        const data = this.load();
+        const account = data.financialAccounts?.find(a => a.id === accountId);
+        if (account) {
+            account.balance = (account.balance || 0) + amount;
+            this.save(data);
+        }
     },
 
     // ===== النسخ الاحتياطي التلقائي (أرشيف متعدد النقاط) =====

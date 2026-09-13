@@ -59,6 +59,7 @@ POS.showPaymentModal = function() {
                             ${p.status === 'paid' ? '✅ مدفوعة' : p.status === 'unpaid' ? '❌ غير مدفوعة' : '⏳ قيد الانتظار'}
                         </span>
                         ${p.requirePerson ? '<span style="font-size:0.6rem;color:var(--warning);">👤 يتطلب اختيار شخص</span>' : ''}
+                        ${p.requireAccount ? '<span style="font-size:0.6rem;color:var(--info);">🏦 يتطلب اختيار حساب</span>' : ''}
                     </button>
                 `).join('')}
             </div>
@@ -90,12 +91,55 @@ POS.selectPaymentMethod = function(methodId) {
         return;
     }
 
+    if (method.requireAccount) {
+        const accounts = DB.getFinancialAccounts().filter(a =>
+            method.id === 'bank_transfer' ? a.type === 'bank' : a.type === 'wallet'
+        );
+        if (accounts.length === 0) {
+            UI.showToast(`⚠️ لا توجد ${method.id === 'bank_transfer' ? 'حسابات بنكية' : 'محافظ إلكترونية'} مضافة. أضِف واحداً من صفحة المحاسبة أولاً`, 'warning');
+            return;
+        }
+        UI.closeModal();
+        this.selectedPaymentMethod = methodId;
+        this.showAccountSelectorForPayment(methodId, accounts);
+        return;
+    }
+
     this.completePayment(methodId);
 };
 
+// ===== اختيار الحساب البنكي/المحفظة قبل إتمام الدفع =====
+POS.showAccountSelectorForPayment = function(methodId, accounts) {
+    const method = DB.getPaymentMethod(methodId);
+    const html = `
+        <div style="text-align:center;margin-bottom:12px;">
+            <p style="color:var(--text-secondary);font-size:0.85rem;">اختر ${method.id === 'bank_transfer' ? 'الحساب البنكي' : 'المحفظة'} المستلم للمبلغ</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+            ${accounts.map(a => `
+                <button onclick="POS.completePayment('${methodId}', ${a.id})" style="
+                    display:flex;justify-content:space-between;align-items:center;
+                    padding:14px;border:2px solid var(--border);border-radius:10px;
+                    background:var(--bg);cursor:pointer;text-align:right;
+                ">
+                    <span style="font-weight:600;">
+                        <i class="fas ${a.type === 'bank' ? 'fa-building-columns' : 'fa-mobile-screen'}" style="color:var(--info);"></i>
+                        ${a.name}
+                    </span>
+                    <span style="color:var(--text-secondary);font-size:0.85rem;">${(a.balance || 0).toFixed(2)} ₪</span>
+                </button>
+            `).join('')}
+        </div>
+        <button onclick="POS.showPaymentModal()" class="btn-primary" style="width:100%;margin-top:15px;padding:10px;background:var(--text-secondary);">
+            ← رجوع
+        </button>
+    `;
+    UI.showModal('🏦 اختيار الحساب', html);
+};
+
 // ===== إكمال عملية الدفع =====
-POS.completePayment = function(methodId) {
-    console.log('💳 completePayment() - طريقة الدفع:', methodId);
+POS.completePayment = function(methodId, accountId) {
+    console.log('💳 completePayment() - طريقة الدفع:', methodId, 'الحساب:', accountId);
     
     const method = DB.getPaymentMethod(methodId);
     if (!method) {
@@ -138,9 +182,9 @@ POS.completePayment = function(methodId) {
     UI.closeModal();
 
     if (this.isWholesale) {
-        this.processWholesalePayment(method, subTotal, discount, total);
+        this.processWholesalePayment(method, subTotal, discount, total, accountId);
     } else {
-        this.processRegularPayment(method, subTotal, discount, total);
+        this.processRegularPayment(method, subTotal, discount, total, accountId);
     }
 
     this.cart = [];
@@ -159,7 +203,7 @@ POS.completePayment = function(methodId) {
 };
 
 // ===== معالجة الدفع بالجملة =====
-POS.processWholesalePayment = function(method, subTotal, discount, total) {
+POS.processWholesalePayment = function(method, subTotal, discount, total, accountId) {
     const customerName = document.getElementById('wholesale-customer')?.value || 'عميل جملة';
     const customerPhone = document.getElementById('wholesale-phone')?.value || '';
     const customerAddress = document.getElementById('wholesale-address')?.value || '';
@@ -215,7 +259,17 @@ POS.processWholesalePayment = function(method, subTotal, discount, total) {
     }
     // طرق الدفع التي لا تتطلب شخصاً (نقدي، بطاقة ائتمان...) تُكمل الفاتورة
     // بدون عميل مرتبط، تماماً مثل سلوك البيع العادي
-    
+
+    // إذا كانت طريقة الدفع بنكية/محفظة، أضف المبلغ لرصيد الحساب المختار تلقائياً
+    let accountName = null;
+    if (accountId) {
+        const account = DB.getFinancialAccount(accountId);
+        if (account) {
+            DB.creditFinancialAccount(accountId, finalTotal);
+            accountName = account.name;
+        }
+    }
+
     const grossProfit = this.cart.reduce((sum, item) => sum + (((item.price || 0) - (item.cost || 0)) * (item.qty || 0)), 0);
     const discountRatio = subTotal > 0 ? discount / subTotal : 0;
     const profit = grossProfit * (1 - discountRatio);
@@ -241,12 +295,17 @@ POS.processWholesalePayment = function(method, subTotal, discount, total) {
         newBalance: newBalance,
         status: method.status === 'paid' ? 'paid' : (method.status === 'pending' ? 'pending' : 'unpaid'),
         paidAmount: method.status === 'paid' ? finalTotal : 0,
+        accountId: accountId || null,
+        accountName: accountName,
         createdBy: Auth.currentUser ? Auth.currentUser.name : 'النظام',
         cashierName: Auth.currentUser ? Auth.currentUser.name : 'النظام'
     };
     
     DB.addInvoice(invoice);
     App.auditLog(`📄 فاتورة جملة #${invoice.invoiceNumber} - ${customerName} - ${invoice.total.toFixed(2)} ₪`);
+    if (accountName) {
+        App.auditLog(`🏦 تحصيل ${finalTotal.toFixed(2)} ₪ في "${accountName}" (فاتورة جملة #${invoice.invoiceNumber})`);
+    }
     
     let message = `✅ تم إصدار فاتورة الجملة #${invoice.invoiceNumber}\n`;
     message += `💰 المبلغ: ${invoice.total.toFixed(2)} ₪\n`;
@@ -274,7 +333,7 @@ POS.processWholesalePayment = function(method, subTotal, discount, total) {
 };
 
 // ===== معالجة الدفع العادي =====
-POS.processRegularPayment = function(method, subTotal, discount, total) {
+POS.processRegularPayment = function(method, subTotal, discount, total, accountId) {
     let personId = null;
     let personName = null;
     let oldBalance = 0;
@@ -307,9 +366,19 @@ POS.processRegularPayment = function(method, subTotal, discount, total) {
         }
     }
 
+    // إذا كانت طريقة الدفع بنكية/محفظة، أضف المبلغ لرصيد الحساب المختار تلقائياً
+    let accountName = null;
+    if (accountId) {
+        const account = DB.getFinancialAccount(accountId);
+        if (account) {
+            DB.creditFinancialAccount(accountId, total);
+            accountName = account.name;
+        }
+    }
+
     // أعد تحميل state من التخزين بعد DB.updatePersonBalance حتى لا تُفقد
     // نسخته الطازجة (الرصيد الجديد) عند استدعاء updateState() بالأسفل
-    if (personId) {
+    if (personId || accountId) {
         state = DB.load();
     }
 
@@ -336,6 +405,8 @@ POS.processRegularPayment = function(method, subTotal, discount, total) {
         oldBalance: oldBalance,
         newBalance: newBalance,
         status: method.status,
+        accountId: accountId || null,
+        accountName: accountName,
         cashierName: Auth.currentUser ? Auth.currentUser.name : 'النظام'
     };
     state.sales.push(sale);
@@ -347,6 +418,9 @@ POS.processRegularPayment = function(method, subTotal, discount, total) {
         message += `\n📊 الرصيد السابق: ${oldBalance.toFixed(2)} ₪`;
         message += `\n📊 الرصيد الجديد: ${newBalance.toFixed(2)} ₪`;
         App.auditLog(`💳 بيع آجل - ${personName} - ${total.toFixed(2)} ₪`);
+    }
+    if (accountName) {
+        App.auditLog(`🏦 تحصيل ${total.toFixed(2)} ₪ في "${accountName}" (فاتورة #${sale.id})`);
     }
 
     // إعادة تعيين الشخص المختار حتى لا يُستخدم بالخطأ في عملية بيع نقدي تالية
@@ -390,6 +464,12 @@ POS.showFinalInvoiceModal = function(saleOrInvoice, isWholesale, returnPage) {
                 <div style="display:flex;justify-content:space-between;padding:5px 0;">
                     <span style="color:var(--text-secondary);">العميل</span>
                     <span style="font-weight:bold;">${personName}</span>
+                </div>
+                ` : ''}
+                ${saleOrInvoice.accountName ? `
+                <div style="display:flex;justify-content:space-between;padding:5px 0;">
+                    <span style="color:var(--text-secondary);">الحساب المستلم</span>
+                    <span style="font-weight:bold;"><i class="fas fa-building-columns"></i> ${saleOrInvoice.accountName}</span>
                 </div>
                 ` : ''}
                 <div style="display:flex;justify-content:space-between;padding:8px 0 0;border-top:1px solid var(--border);margin-top:6px;font-size:1.15rem;">
