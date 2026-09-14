@@ -800,10 +800,19 @@ const App = {
             POS.scanner = scanner;
 
             // صندوق مسح مستطيل (أعرض من ارتفاعه) لأنه أنسب لقراءة باركودات
-            // خط 1D مثل EAN/UPC/CODE128 مقارنة بالصندوق المربع
+            // خط 1D مثل EAN/UPC/CODE128 مقارنة بالصندوق المربع.
+            // نستخدم دالة تُرجع حجماً نسبياً من أبعاد الفيديو الفعلية بدل قيمة
+            // ثابتة (300×150)، لأن بعض كاميرات اللابتوب المدمجة تعمل بدقة
+            // منخفضة (مثل 640×480) فيكون الصندوق الثابت أكبر من الإطار
+            // نفسه ويمنع المكتبة من العثور على الباركود إطلاقاً.
             const config = {
                 fps: 10,
-                qrbox: { width: 300, height: 150 },
+                qrbox: (viewfinderWidth, viewfinderHeight) => {
+                    const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+                    const boxWidth = Math.floor(Math.min(viewfinderWidth * 0.8, minEdge * 1.6));
+                    const boxHeight = Math.floor(boxWidth / 2);
+                    return { width: boxWidth, height: boxHeight };
+                },
                 aspectRatio: 1.777,
                 disableFlip: false
             };
@@ -823,29 +832,27 @@ const App = {
                 config.experimentalFeatures = { useBarCodeDetectorIfSupported: true };
             }
 
-            scanner.start(
-                { facingMode: "environment" },
-                config,
-                (decodedText) => {
-                    UI.showToast(`✅ تم مسح الباركود: ${decodedText}`, 'success');
-                    if (navigator.vibrate) navigator.vibrate(100);
+            const onScanSuccess = (decodedText) => {
+                UI.showToast(`✅ تم مسح الباركود: ${decodedText}`, 'success');
+                if (navigator.vibrate) navigator.vibrate(100);
 
-                    if (typeof onScan === 'function') {
-                        onScan(decodedText);
-                    } else if (targetId) {
-                        const input = document.getElementById(targetId);
-                        if (input) {
-                            input.value = decodedText;
-                            input.dispatchEvent(new Event('change'));
-                        }
+                if (typeof onScan === 'function') {
+                    onScan(decodedText);
+                } else if (targetId) {
+                    const input = document.getElementById(targetId);
+                    if (input) {
+                        input.value = decodedText;
+                        input.dispatchEvent(new Event('change'));
                     }
-
-                    App.stopScanner();
-                },
-                (errorMessage) => {
-                    console.debug('Scanning...', errorMessage);
                 }
-            ).then(() => {
+
+                App.stopScanner();
+            };
+            const onScanFailure = (errorMessage) => {
+                console.debug('Scanning...', errorMessage);
+            };
+
+            const onStartSuccess = () => {
                 console.log('✅ الكاميرا تعمل');
                 if (POS.flashOn) {
                     try {
@@ -860,13 +867,57 @@ const App = {
                         }
                     } catch (e) {}
                 }
-            }).catch(err => {
+            };
+
+            const onStartFailure = (err) => {
                 console.error('Scanner error:', err);
                 UI.showToast('❌ فشل في تشغيل الكاميرا، تأكد من السماح بالوصول لها', 'error');
                 POS.scanner = null;
                 overlay.style.display = 'none';
                 overlay.classList.remove('active');
                 readerElement.innerHTML = '';
+            };
+
+            // نحدد الكاميرا المستخدمة حسب عدد الكاميرات المتاحة فعلياً على
+            // الجهاز، بدلاً من فرض { facingMode: "environment" } دائماً.
+            // هذا الطلب يعني "الكاميرا الخلفية" وهو مخصص للموبايل/التابلت؛
+            // على اللابتوب (كاميرا واحدة مدمجة أمامية فقط) قد يعمل هذا
+            // الطلب بشكل غير موثوق أو بجودة/تركيز أقل من المثالي، فيفتح
+            // فيديو لكن يفشل في التعرف على الباركود. لذلك: إن وُجدت كاميرا
+            // واحدة فقط نستخدم معرّفها (id) مباشرة، وإن وُجد أكثر من كاميرا
+            // (الحالة الشائعة على الموبايل) نستخدم facingMode كما كان.
+            Html5Qrcode.getCameras().then(devices => {
+                let cameraConfig;
+                if (devices && devices.length === 1) {
+                    cameraConfig = devices[0].id;
+                } else if (devices && devices.length > 1) {
+                    cameraConfig = { facingMode: "environment" };
+                } else {
+                    cameraConfig = { facingMode: "environment" };
+                }
+
+                scanner.start(cameraConfig, config, onScanSuccess, onScanFailure)
+                    .then(onStartSuccess)
+                    .catch(err => {
+                        // إذا فشل الطلب المحدد (مثلاً "environment" غير متاح
+                        // فعلياً رغم وجود أكثر من كاميرا)، جرّب أي كاميرا متاحة
+                        // كمحاولة أخيرة بدلاً من إظهار خطأ فوري للمستخدم
+                        console.warn('⚠️ فشل تشغيل الكاميرا بالإعداد المحدد، جارِ المحاولة بأي كاميرا متاحة...', err);
+                        if (devices && devices.length > 0) {
+                            scanner.start(devices[0].id, config, onScanSuccess, onScanFailure)
+                                .then(onStartSuccess)
+                                .catch(onStartFailure);
+                        } else {
+                            onStartFailure(err);
+                        }
+                    });
+            }).catch(err => {
+                // تعذّر سرد الكاميرات (مثلاً بسبب رفض إذن المتصفح)؛ نحاول
+                // بالإعداد الافتراضي كما كان سابقاً
+                console.warn('⚠️ تعذّر سرد الكاميرات المتاحة، جارِ المحاولة بالإعداد الافتراضي...', err);
+                scanner.start({ facingMode: "environment" }, config, onScanSuccess, onScanFailure)
+                    .then(onStartSuccess)
+                    .catch(onStartFailure);
             });
         } catch (error) {
             console.error('Scanner initialization error:', error);
